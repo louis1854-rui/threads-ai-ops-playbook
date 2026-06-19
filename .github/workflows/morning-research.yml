@@ -2,8 +2,8 @@ name: 毎朝の競合アカウント分析
 
 on:
   schedule:
-    # 毎朝7時JST（UTC 22:00 前日）
-    - cron: '0 22 * * *'
+    # 毎朝5時半JST（UTC 20:30 前日）
+    - cron: '30 20 * * *'
   workflow_dispatch:
     # 手動実行も可能
 
