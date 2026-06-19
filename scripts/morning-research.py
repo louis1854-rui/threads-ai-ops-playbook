@@ -70,7 +70,19 @@ def get_competitor_accounts():
         return [{"アカウント名": "@sample", "URL": "https://www.threads.com/@sample", "ジャンル": "AI", "優先度": "高"}]
 
     sheet = client.open_by_key(SHEET_ID).worksheet("①競合アカウントリスト")
-    records = sheet.get_all_records()
+    # ヘッダー重複対策：get_all_valuesを使って手動でdict変換
+    all_values = sheet.get_all_values()
+    if not all_values:
+        return []
+    headers = all_values[0]
+    records = []
+    for row in all_values[1:]:
+        record = {}
+        for i, header in enumerate(headers):
+            if header and i < len(row):
+                record[header] = row[i]
+        if any(v for v in record.values()):
+            records.append(record)
     # 優先度「高」のものを優先、なければ全件返す
     high_priority = [r for r in records if r.get("優先度") == "高" and r.get("URL")]
     return high_priority if high_priority else [r for r in records if r.get("URL")]
