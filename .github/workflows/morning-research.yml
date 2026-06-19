@@ -1,0 +1,39 @@
+name: 毎朝の競合アカウント分析
+
+on:
+  schedule:
+      # 毎朝7時JST（UTC 22:00 前日）
+          - cron: '0 22 * * *'
+            workflow_dispatch:
+                # 手動実行も可能
+
+                jobs:
+                  morning-research:
+                      runs-on: ubuntu-latest
+                          timeout-minutes: 10
+
+                              steps:
+                                    - name: リポジトリをチェックアウト
+                                            uses: actions/checkout@v4
+
+                                                  - name: Python 3.11 をセットアップ
+                                                          uses: actions/setup-python@v5
+                                                                  with:
+                                                                            python-version: '3.11'
+
+                                                                                  - name: 依存パッケージをインストール
+                                                                                          run: pip install -r requirements.txt
+
+                                                                                                - name: 競合アカウント分析スクリプトを実行
+                                                                                                        env:
+                                                                                                                  GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+                                                                                                                            GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+                                                                                                                                    run: python scripts/morning-research.py
+                                                                                                                                    
+                                                                                                                                          - name: 生成されたプロンプトをアーティファクトとして保存
+                                                                                                                                                  uses: actions/upload-artifact@v4
+                                                                                                                                                          with:
+                                                                                                                                                                    name: morning-prompt-${{ github.run_id }}
+                                                                                                                                                                              path: logs/morning-prompt-*.txt
+                                                                                                                                                                                        if-no-files-found: warn
+                                                                                                                                                                                        
