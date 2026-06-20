@@ -1,32 +1,31 @@
 name: 毎朝の競合アカウント分析
 
 on:
-  schedule:
-    # 毎朝5時JST（UTC 20:00 前日）
-    - cron: '0 20 * * *'
   workflow_dispatch:
-    # 手動実行も可能
+      # このワークフローは手動実行専用です
+          # Claudeチャット経由でバズリサーチを行うため、自動スケジュールは廃止
+              # 運用方法: このチャットで「今日のバズリサーチして」と指示する
 
-jobs:
-  morning-research:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+              jobs:
+                morning-research:
+                    runs-on: ubuntu-latest
+                        timeout-minutes: 10
 
-    steps:
-      - name: リポジトリをチェックアウト
-        uses: actions/checkout@v4
+                            steps:
+                                  - name: リポジトリをチェックアウト
+                                          uses: actions/checkout@v4
 
-      - name: Python 3.11 をセットアップ
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+                                                - name: Python 3.11 をセットアップ
+                                                        uses: actions/setup-python@v5
+                                                                with:
+                                                                          python-version: '3.11'
 
-      - name: 依存パッケージをインストール
-        run: pip install -r requirements.txt
+                                                                                - name: 依存パッケージをインストール
+                                                                                        run: pip install -r requirements.txt
 
-      - name: 競合アカウント分析スクリプトを実行
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
-        run: python scripts/morning-research.py
+                                                                                              - name: 競合アカウント分析スクリプトを実行
+                                                                                                      env:
+                                                                                                                ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+                                                                                                                          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+                                                                                                                                    GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+                                                                                                                                            run: python scripts/morning-research.py
