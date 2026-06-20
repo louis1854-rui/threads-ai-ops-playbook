@@ -1,161 +1,99 @@
-"""
-毎朝の競合アカウント自動分析スクリプト
-実行前に以下の環境変数を設定してください：
-  GOOGLE_SHEETS_ID: スプレッドシートのID
-  GOOGLE_CREDENTIALS_JSON: サービスアカウントJSONの内容（文字列）
-  GOOGLE_CREDENTIALS_PATH: サービスアカウントJSONのパス（ローカル実行時）
-"""
-
-import os
-import json
-from datetime import datetime
-
+# morning-research v2
+import os, json, re, time
+from datetime import datetime, timezone, timedelta
 try:
-    import gspread
-    from google.oauth2.service_account import Credentials
-    GSPREAD_AVAILABLE = True
-    USE_LEGACY_AUTH = False
+    import gspread; from google.oauth2.service_account import Credentials; GSPREAD_AVAILABLE = True
 except ImportError:
-    try:
-        import gspread
-        from oauth2client.service_account import ServiceAccountCredentials
-        GSPREAD_AVAILABLE = True
-        USE_LEGACY_AUTH = True
-    except ImportError:
-        GSPREAD_AVAILABLE = False
-        USE_LEGACY_AUTH = False
-
-# Google Sheetsの設定
+    GSPREAD_AVAILABLE = False
+try:
+    import requests; REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+try:
+    import anthropic; ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
 SHEET_ID = os.environ.get("GOOGLE_SHEETS_ID", "1nViEkwMMvFuZEL6OD38X4cAUQq-erYk8Kl1GEwF0FwQ")
 CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")
-CREDENTIALS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", "")
-
-SCOPES = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive"
-]
-
-
-def get_gspread_client():
-    """Google Sheets クライアントを取得"""
-    if not GSPREAD_AVAILABLE:
-        return None
-    if CREDENTIALS_JSON:
-        # GitHub ActionsのSecretsからJSON文字列で渡す方式
-        creds_dict = json.loads(CREDENTIALS_JSON)
-        if USE_LEGACY_AUTH:
-            import tempfile
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-                json.dump(creds_dict, f)
-                tmp_path = f.name
-            creds = ServiceAccountCredentials.from_json_keyfile_name(tmp_path, SCOPES)
-        else:
-            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-        return gspread.authorize(creds)
-    elif CREDENTIALS_PATH:
-        # ローカル実行：JSONファイルパスで渡す方式
-        if USE_LEGACY_AUTH:
-            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_PATH, SCOPES)
-        else:
-            creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-        return gspread.authorize(creds)
-    return None
-
-
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+BUZZ_THRESHOLD = 10; JST = timezone(timedelta(hours=9))
+SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+OWN_ACCOUNTS = [{"name": "haru", "genre": "ikuji", "target": "0-3sai mama", "style": "onesan Hook: ano~"},
+    {"name": "lemon", "genre": "ikuji otoku", "target": "0-2sai mama", "style": "otoku genki"},
+    {"name": "fumin", "genre": "ikuji okane", "target": "30sai okasan", "style": "osaka-ben"}]
+def gc(): return gspread.authorize(Credentials.from_service_account_info(json.loads(CREDENTIALS_JSON), scopes=SCOPES)) if GSPREAD_AVAILABLE and CREDENTIALS_JSON else None
 def get_competitor_accounts():
-    """スプレッドシートの①競合アカウントリストからアカウント情報を取得"""
-    client = get_gspread_client()
-    if not client:
-        print("警告：認証情報がありません。サンプルデータを使用します。")
-        return [{"アカウント名": "@sample", "URL": "https://www.threads.com/@sample", "ジャンル": "AI", "優先度": "高"}]
-
-    sheet = client.open_by_key(SHEET_ID).worksheet("①競合アカウントリスト")
-    # ヘッダー重複対策：get_all_valuesを使って手動でdict変換
-    all_values = sheet.get_all_values()
-    if not all_values:
-        return []
-    headers = all_values[0]
-    records = []
-    for row in all_values[1:]:
-        record = {}
-        for i, header in enumerate(headers):
-            if header and i < len(row):
-                record[header] = row[i]
-        if any(v for v in record.values()):
-            records.append(record)
-    # 優先度「高」のものを優先、なければ全件返す
-    high_priority = [r for r in records if r.get("優先度") == "高" and r.get("URL")]
-    return high_priority if high_priority else [r for r in records if r.get("URL")]
-
-
-def append_to_buzz_log(date_str, post_url, hook, memo=""):
-    """②バズ投稿ログにデータを追記"""
-    client = get_gspread_client()
-    if not client:
-        print("警告：バズ投稿ログへの書き込みをスキップしました。")
-        return
-    sheet = client.open_by_key(SHEET_ID).worksheet("②バズ投稿ログ")
-    sheet.append_row([date_str, post_url, hook, memo])
-    print(f"②バズ投稿ログに追記しました：{date_str}")
-
-
-def append_to_my_log(post_date, post_url, hook, memo=""):
-    """③自分の投稿ログにデータを追記"""
-    client = get_gspread_client()
-    if not client:
-        print("警告：自分の投稿ログへの書き込みをスキップしました。")
-        return
-    sheet = client.open_by_key(SHEET_ID).worksheet("③自分の投稿ログ")
-    sheet.append_row([post_date, post_url, hook, memo])
-    print(f"③自分の投稿ログに追記しました：{post_date}")
-
-
-def generate_morning_prompt(accounts):
-    """Claude Codeに競合分析を依頼するプロンプトを生成してファイルに保存"""
-    account_list = "\n".join([
-        f"- {r['アカウント名']}（{r.get('ジャンル', '')}）：{r['URL']}"
-        for r in accounts
-    ])
-    today = datetime.now().strftime('%Y年%m月%d日')
-
-    prompt = f"""このリポジトリのAGENTS.mdとdocs/をすべて読んでください。
-競合アカウント分析モードで動いてください。
-本日（{today}）の分析対象：
-{account_list}
-【分析対象】過去24時間以内（{today} 05:30以降）に投稿されたもののみを対象にしてください。該当投稿がない場合はそのアカウントはスキップしてください。
-各アカウントの投稿を確認し、伸びていそうな投稿のフックと構成を分析してください。
-分析結果をもとに、自分のアカウント用のオリジナル投稿案をツリー投稿（3〜5リプ）で作成してください。
-【1投稿目：最重要】フックのみ。スクロールが止まる一文に全力を注いでください。フック案を3パターン出してから最良のものを選んでください。
-【2〜5投稿目】事実→意味→使い方→注意点→まとめの構成で。
-投稿前に必ず確認を取ってください。"""
-
-    # プロンプトをファイルに保存
-    output_path = "prompts/morning-research-prompt.md"
-    os.makedirs("prompts", exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(f"# 毎朝の競合分析プロンプト\n\n")
-        f.write(f"生成日時：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        f.write(prompt)
-    print(f"プロンプトを保存しました：{output_path}")
-    return prompt
-
-
+    c = gc()
+    if not c: return []
+    rows = c.open_by_key(SHEET_ID).worksheet("①競合アカウントリスト").get_all_values()
+    if not rows: return []
+    h = rows[0]
+    recs = [{h[i]: r[i] for i in range(min(len(h),len(r))) if h[i]} for r in rows[1:] if any(r)]
+    high = [r for r in recs if r.get("優先度")=="高" and r.get("URL")]
+    return high or [r for r in recs if r.get("URL")]
+def bl(d, u, h, m=""): c=gc(); c and c.open_by_key(SHEET_ID).worksheet("②バズ投稿ログ").append_row([d,u,h,m])
+def pd(name, d, theme, drafts):
+    c=gc()
+    if not c: return
+    s=c.open_by_key(SHEET_ID).worksheet("②バズ投稿ログ")
+    [s.append_row([d,f"[draft{i}]{name}",theme,dr]) for i,dr in enumerate(drafts,1)]
+    print(f"[draft] {name}: {len(drafts)}")
+def ml(d, u, h, m=""): c=gc(); c and c.open_by_key(SHEET_ID).worksheet("③自分の投稿ログ").append_row([d,u,h,m])
+def fetch_threads_posts(profile_url):
+    if not REQUESTS_AVAILABLE: return []
+    m = re.search(r'threads\.(?:com|net)/@([\w._-]+)', profile_url)
+    if not m: return []
+    un, h = m.group(1), {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "X-IG-App-ID": "238260118697367"}
+    try:
+        r = requests.get(f"https://www.threads.net/api/v1/users/username_info/?username={un}", headers=h, timeout=10)
+        if r.status_code != 200: return []
+        uid = r.json().get("user",{}).get("pk") or r.json().get("user",{}).get("id")
+        if not uid: return []
+        time.sleep(1)
+        r2 = requests.get(f"https://www.threads.net/api/v1/feeds/user_threads_feed/?userid={uid}&count=20", headers=h, timeout=10)
+        if r2.status_code != 200: return []
+        cutoff, posts = datetime.now(timezone.utc)-timedelta(hours=24), []
+        for t in r2.json().get("threads",[]):
+            for item in t.get("thread_items",[]):
+                p = item.get("post",{})
+                pt = datetime.fromtimestamp(p.get("taken_at",0), tz=timezone.utc)
+                if pt < cutoff: continue
+                cap = p.get("caption") or {}
+                txt = cap.get("text","") if isinstance(cap,dict) else ""
+                pid = p.get("pk","")
+                posts.append({"username":un,"text":txt,"likes":p.get("like_count",0),"url":f"https://www.threads.com/@{un}/post/{pid}" if pid else ""})
+        print(f"  {un}: {len(posts)} posts"); return posts
+    except Exception as e: print(f"  {un}: error: {e}"); return []
+def filter_buzz(posts, thr=BUZZ_THRESHOLD): return [p for p in posts if p.get("likes",0)>=thr]
+def generate_drafts(summary, acct):
+    if not ANTHROPIC_AVAILABLE or not ANTHROPIC_API_KEY: return []
+    ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    today = datetime.now(JST).strftime("%Y/%m/%d")
+    p = (f"Competitor buzz ({today}):\n{summary}\n\n"
+         f"Acct:{acct['name']} Genre:{acct['genre']} Target:{acct['target']} Style:{acct['style']}\n\n"
+         "Create 3 original Japanese post drafts for Threads parenting content.\n"
+         "Do NOT copy competitor FORMAT. Use buzz GENRE only as reference.\n"
+         "post1=hook(1 line) + post2-4=body. Mark: ---draft1--- ---draft2--- ---draft3---")
+    try:
+        msg = ai.messages.create(model="claude-opus-4-5", max_tokens=2000, messages=[{"role":"user","content":p}])
+        return [d.strip() for d in re.split(r'---draft\d+---', msg.content[0].text) if d.strip()][:3]
+    except Exception as e: print(f"  AI:{e}"); return []
 def main():
-    """メイン処理"""
-    print(f"=== 毎朝の競合アカウント分析開始 ===")
-    print(f"実行日時：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    # 競合アカウント情報を取得
-    accounts = get_competitor_accounts()
-    print(f"分析対象アカウント数：{len(accounts)}")
-    for acc in accounts:
-        print(f"  - {acc.get('アカウント名', 'N/A')}（{acc.get('URL', 'N/A')}）")
-
-    # プロンプトを生成
-    prompt = generate_morning_prompt(accounts)
-    print("\nプロンプト生成完了。Claude Codeで実行してください。")
-    print("\n=== 分析完了 ===")
-
-
-if __name__ == "__main__":
-    main()
+    print("=== morning-research v2 ===")
+    today = datetime.now(JST).strftime("%Y-%m-%d")
+    accts = get_competitor_accounts()
+    if not accts: return
+    buzz, lines = [], []
+    for acc in accts:
+        url, name = acc.get("URL",""), acc.get("アカウント名", acc.get("URL",""))
+        for p in filter_buzz(fetch_threads_posts(url)):
+            bl(today, p["url"], p["text"][:100], f"likes:{p['likes']}|{name}")
+            buzz.append(p); lines.append(f"- {name}: likes={p['likes']} '{p['text'][:80]}'")
+        time.sleep(2)
+    summary = "\n".join(lines) if lines else "No buzz today."
+    print(f"buzz:{len(buzz)}")
+    for acct in OWN_ACCOUNTS:
+        drafts = generate_drafts(summary, acct)
+        if drafts: pd(acct["name"], today, "buzz-draft", drafts)
+    print("=== done ===")
+if __name__ == "__main__": main()
