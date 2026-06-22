@@ -47,8 +47,8 @@ OWN_ACCOUNTS = [
 ]
 
 # バズ判定のしきい値
-BUZZ_LIKES_THRESHOLD = int(os.environ.get("BUZZ_LIKES_THRESHOLD", "50"))
-TOP_N_POSTS          = int(os.environ.get("TOP_N_POSTS", "5"))
+BUZZ_LIKES_THRESHOLD = int(os.environ.get("BUZZ_LIKES_THRESHOLD", "10"))
+# TOP_N_POSTS は廃止: 基準を満たす投稿を全件抽出する
 
 
 # ---- Googleスプレッドシート接続 -----------------------------------
@@ -229,7 +229,7 @@ def filter_buzz_posts(posts, hours=24):
         key=lambda x: x["likes"] * 2 + x["views"] / 1000,
         reverse=True
     )
-    return scored[:TOP_N_POSTS]
+    return scored  # 基準を満たす投稿を全件返す
 
 
 # ---- AI分析・投稿案生成 -------------------------------------------
