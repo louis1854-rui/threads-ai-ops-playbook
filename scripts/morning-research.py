@@ -49,6 +49,12 @@ OWN_ACCOUNTS = [
 # バズ判定のしきい値
 BUZZ_LIKES_THRESHOLD = int(os.environ.get("BUZZ_LIKES_THRESHOLD", "10"))
 # TOP_N_POSTS は廃止: 基準を満たす投稿を全件抽出する
+# アカウントのスライス設定（分割実行用）
+# ACCOUNT_OFFSET: 開始インデックス（0始まり）
+# ACCOUNT_COUNT: 処理件数（0=残り全件）
+ACCOUNT_OFFSET = int(os.environ.get("ACCOUNT_OFFSET", "0"))
+ACCOUNT_COUNT  = int(os.environ.get("ACCOUNT_COUNT", "0"))
+
 
 
 # ---- Googleスプレッドシート接続 -----------------------------------
@@ -335,7 +341,15 @@ def main():
         print("GitHub Secrets に COMPETITOR_ACCOUNTS=user1,user2 の形式で設定してください。")
         return
 
-    for competitor in COMPETITOR_ACCOUNTS:
+    # アカウントのスライス（ACCOUNT_OFFSET / ACCOUNT_COUNT で分割実行）
+    accounts_to_process = COMPETITOR_ACCOUNTS
+    if ACCOUNT_OFFSET > 0 or ACCOUNT_COUNT > 0:
+        start = ACCOUNT_OFFSET
+        end   = (start + ACCOUNT_COUNT) if ACCOUNT_COUNT > 0 else len(accounts_to_process)
+        accounts_to_process = accounts_to_process[start:end]
+        print("  [slice] " + str(start) + "〜" + str(end - 1) + " 件目を処理 (合計 " + str(len(COMPETITOR_ACCOUNTS)) + " 件中)")
+
+    for competitor in accounts_to_process:
         print("--- 競合アカウント分析: @" + competitor + " ---")
 
         posts = fetch_threads_posts(competitor)
