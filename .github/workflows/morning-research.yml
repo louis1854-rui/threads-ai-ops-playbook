@@ -2,15 +2,25 @@ name: 毎朝の競合アカウント分析
 
 on:
   schedule:
-    # JST 05:00 = UTC 20:00 (前日)
+    # バッチ1: JST 05:00 = UTC 20:00 (前日) → 先頭7件
     - cron: '0 20 * * *'
+    # バッチ2: JST 06:00 = UTC 21:00 (前日) → 8件目以降
+    - cron: '0 21 * * *'
   workflow_dispatch:
-    # 手動実行も可能
+    inputs:
+      account_offset:
+        description: '開始アカウントインデックス (0始まり)'
+        required: false
+        default: '0'
+      account_count:
+        description: '処理件数 (0=全件)'
+        required: false
+        default: '0'
 
 jobs:
   morning-research:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: リポジトリをチェックアウト
@@ -24,12 +34,37 @@ jobs:
       - name: 依存パッケージをインストール
         run: pip install -r requirements.txt
 
+      - name: バッチ設定を決定
+        id: batch_config
+        run: |
+          # cron経由の場合は実行時刻でバッチを判定
+          # 手動実行の場合はinputsを使用
+          HOUR=$(date -u +%H)
+          echo "UTC hour: $HOUR"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "offset=${{ github.event.inputs.account_offset }}" >> $GITHUB_OUTPUT
+            echo "count=${{ github.event.inputs.account_count }}" >> $GITHUB_OUTPUT
+          elif [ "$HOUR" = "20" ]; then
+            # JST 5時バッチ: 先頭7件
+            echo "offset=0" >> $GITHUB_OUTPUT
+            echo "count=7" >> $GITHUB_OUTPUT
+          elif [ "$HOUR" = "21" ]; then
+            # JST 6時バッチ: 8件目以降（全件）
+            echo "offset=7" >> $GITHUB_OUTPUT
+            echo "count=0" >> $GITHUB_OUTPUT
+          else
+            # その他: 全件処理
+            echo "offset=0" >> $GITHUB_OUTPUT
+            echo "count=0" >> $GITHUB_OUTPUT
+          fi
+
       - name: 競合アカウント分析スクリプトを実行
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
           COMPETITOR_ACCOUNTS: ${{ secrets.COMPETITOR_ACCOUNTS }}
-          BUZZ_LIKES_THRESHOLD: ${{ secrets.BUZZ_LIKES_THRESHOLD || '50' }}
-          TOP_N_POSTS: ${{ secrets.TOP_N_POSTS || '5' }}
+          BUZZ_LIKES_THRESHOLD: ${{ secrets.BUZZ_LIKES_THRESHOLD || '10' }}
+          ACCOUNT_OFFSET: ${{ steps.batch_config.outputs.offset }}
+          ACCOUNT_COUNT: ${{ steps.batch_config.outputs.count }}
         run: python scripts/morning-research.py
